@@ -40,7 +40,7 @@ contract Manager is OwnableUpgradeable, ERC721HolderUpgradeable, ERC1155HolderUp
     }
 
     function stakeTaxNFT(uint tokenId, uint stableTax, uint percentageTax, address[] memory _approvedGames) public {
-        require(percentageTax < globalSplit, 'ill split percentage');
+        require(percentageTax <= globalSplit, 'ill split percentage');
 
         origin.safeTransferFrom(msg.sender, address(this), tokenId, '');
         stakedNFTs[tokenId] = StakedNFT(msg.sender, stableTax, percentageTax, _approvedGames);
@@ -50,10 +50,11 @@ contract Manager is OwnableUpgradeable, ERC721HolderUpgradeable, ERC1155HolderUp
     function unstakeTaxNFT(uint tokenId) public {
         require(msg.sender == stakedNFTs[tokenId].holder, 'ill holder');
         delete stakedNFTs[tokenId];
+        origin.safeTransferFrom(address(this), msg.sender, tokenId, '');
     }
 
     function updateTax(uint tokenId, uint stableTax, uint percentageTax) public {
-        require(percentageTax < globalSplit, 'ill split percentage');
+        require(percentageTax <= globalSplit, 'ill split percentage');
 
         StakedNFT storage stakedNFT = stakedNFTs[tokenId];
         require(msg.sender == stakedNFT.holder, 'ill holder');
@@ -61,6 +62,7 @@ contract Manager is OwnableUpgradeable, ERC721HolderUpgradeable, ERC1155HolderUp
         stakedNFT.percentageTax = percentageTax;
     }
 
+    // reset approvals wholly
     function updateApproval(uint tokenId, address[] memory newApprovals) public {
         StakedNFT storage stakedNFT = stakedNFTs[tokenId];
         require(msg.sender == stakedNFT.holder, 'ill holder');
@@ -105,14 +107,17 @@ contract Manager is OwnableUpgradeable, ERC721HolderUpgradeable, ERC1155HolderUp
         require(total == msg.value, 'ill value');
 
         (uint minterStableTax, uint minterPercentageTax) = origin.taxSplit(originTokenId);
-        uint minterTax = max(minterStableTax, minterPercentageTax * total / SPLIT_BASE);
-        uint holderTax = max(stakedNFT.stableTax, stakedNFT.percentageTax * total / SPLIT_BASE);
+        uint minterTax = max(minterStableTax * amount, minterPercentageTax * total / SPLIT_BASE);
+        uint holderTax = max(stakedNFT.stableTax * amount, stakedNFT.percentageTax * total / SPLIT_BASE);
         uint gameRevenue = total - minterTax - holderTax;
 
         /* split revenue */
         payable(origin.minter(originTokenId)).transfer(minterTax);
         payable(stakedNFT.holder).transfer(holderTax);
         payable(game).transfer(gameRevenue);
+
+        // mint derivations
+        derivations.mint(msg.sender, derivationsTokenId, amount);
     }
 
     function approvedGames(uint tokenId) public view returns (address[] memory){
