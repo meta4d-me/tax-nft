@@ -24,6 +24,9 @@ contract TaxNFT is ITaxNFT, OwnableUpgradeable, ERC721Upgradeable {
 
     address public manager;
 
+    event UpdateTaxSplit(uint tokenId, uint stableTax, uint percentageTax);
+    event BatchUpdateTaxSplit(uint[]  tokenId, uint stableTax, uint percentageTax);
+
     function initialize(string memory name, string memory symbol, string memory _baseURI, address _manager) public initializer {
         __ERC721_init_unchained(name, symbol);
         __Ownable_init_unchained();
@@ -61,6 +64,7 @@ contract TaxNFT is ITaxNFT, OwnableUpgradeable, ERC721Upgradeable {
 
         taxSplit[tokenId].stableTax = stableTax;
         taxSplit[tokenId].percentageTax = percentageTax;
+        emit UpdateTaxSplit(tokenId, stableTax, percentageTax);
     }
 
     function setMinterBatchTaxSplit(uint[] memory tokenIds, uint stableTax, uint percentageTax) public {
@@ -72,6 +76,7 @@ contract TaxNFT is ITaxNFT, OwnableUpgradeable, ERC721Upgradeable {
             taxSplit[tokenId].stableTax = stableTax;
             taxSplit[tokenId].percentageTax = percentageTax;
         }
+        emit BatchUpdateTaxSplit(tokenIds, stableTax, percentageTax);
     }
 
     function tokenURI(uint256 tokenId) public view virtual override returns (string memory) {

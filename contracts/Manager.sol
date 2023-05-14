@@ -7,7 +7,6 @@ import '@openzeppelin/contracts-upgradeable/token/ERC1155/utils/ERC1155HolderUpg
 import '@openzeppelin/contracts-upgradeable/utils/cryptography/SignatureCheckerUpgradeable.sol';
 
 import './interfaces/IManager.sol';
-// TODO: events
 
 contract Manager is OwnableUpgradeable, ERC721HolderUpgradeable, ERC1155HolderUpgradeable, IManager {
 
@@ -44,6 +43,8 @@ contract Manager is OwnableUpgradeable, ERC721HolderUpgradeable, ERC1155HolderUp
 
         origin.safeTransferFrom(msg.sender, address(this), tokenId, '');
         stakedNFTs[tokenId] = StakedNFT(msg.sender, stableTax, percentageTax, _approvedGames);
+
+        emit NFTStaked(tokenId, stableTax, percentageTax, _approvedGames);
     }
 
     // clear all stale status after unstake
@@ -51,6 +52,7 @@ contract Manager is OwnableUpgradeable, ERC721HolderUpgradeable, ERC1155HolderUp
         require(msg.sender == stakedNFTs[tokenId].holder, 'ill holder');
         delete stakedNFTs[tokenId];
         origin.safeTransferFrom(address(this), msg.sender, tokenId, '');
+        emit NFTUnstaked(tokenId);
     }
 
     function updateTax(uint tokenId, uint stableTax, uint percentageTax) public {
@@ -60,6 +62,8 @@ contract Manager is OwnableUpgradeable, ERC721HolderUpgradeable, ERC1155HolderUp
         require(msg.sender == stakedNFT.holder, 'ill holder');
         stakedNFT.stableTax = stableTax;
         stakedNFT.percentageTax = percentageTax;
+
+        emit TaxUpdated(tokenId, stableTax, percentageTax);
     }
 
     // reset approvals wholly
@@ -67,6 +71,7 @@ contract Manager is OwnableUpgradeable, ERC721HolderUpgradeable, ERC1155HolderUp
         StakedNFT storage stakedNFT = stakedNFTs[tokenId];
         require(msg.sender == stakedNFT.holder, 'ill holder');
         stakedNFT.approvedGames = newApprovals;
+        emit ApprovalGamesUpdated(tokenId, newApprovals);
     }
 
     // game owner should set derivation price before user mint derivation
@@ -74,6 +79,8 @@ contract Manager is OwnableUpgradeable, ERC721HolderUpgradeable, ERC1155HolderUp
         // lower 160bit of derivationTokenId should be same with msg.sender, restrict the derivationTokenId space of the each game
         require(msg.sender == address(uint160(derivationTokenId)), 'ill derivation id');
         derivationPrice[derivationTokenId] = price;
+
+        emit PriceUpdated(derivationTokenId, price);
     }
 
     // staked Origin NFT set approval to game, or any game(if they don't set any approval)
@@ -102,7 +109,8 @@ contract Manager is OwnableUpgradeable, ERC721HolderUpgradeable, ERC1155HolderUp
             usedSigNonce[game][nonce] = true;
         }
 
-        uint total = derivationPrice[derivationsTokenId] * amount;
+        uint price = derivationPrice[derivationsTokenId];
+        uint total = price * amount;
         require(total > 0, 'ill derivation price');
         require(total == msg.value, 'ill value');
 
@@ -118,6 +126,8 @@ contract Manager is OwnableUpgradeable, ERC721HolderUpgradeable, ERC1155HolderUp
 
         // mint derivations
         derivations.mint(msg.sender, derivationsTokenId, amount);
+
+        emit DerivationMinted(originTokenId, derivationsTokenId, price, amount, minterTax, holderTax);
     }
 
     function approvedGames(uint tokenId) public view returns (address[] memory){

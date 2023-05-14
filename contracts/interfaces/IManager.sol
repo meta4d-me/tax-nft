@@ -7,6 +7,13 @@ import './ITaxSemiNFT.sol';
 
 interface IManager {
 
+    event NFTStaked(uint indexed tokenId, uint initStableTax, uint initPercentageTax, address[] approvedGames);
+    event NFTUnstaked(uint indexed tokenId);
+    event TaxUpdated(uint indexed tokenId, uint stableTax, uint percentageTax);
+    event ApprovalGamesUpdated(uint indexed tokenId, address[] games);
+    event PriceUpdated(uint indexed derivationTokenId, uint price);
+    event DerivationMinted(uint indexed originTokenId, uint indexed derivationId, uint price, uint amount, uint minterTax, uint holderTax);
+
     function globalSplit() external view returns (uint);
 
     function origin() external view returns (ITaxNFT);
