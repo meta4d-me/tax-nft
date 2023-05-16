@@ -9,7 +9,15 @@ const PRIV_1 = env.PRIVATE_KEY_1;
 const PRIV_2 = env.PRIVATE_KEY_2;
 const PRIV_3 = env.PRIVATE_KEY_3;
 const config: HardhatUserConfig = {
-    solidity: "0.8.18",
+    solidity: {
+        version: "0.8.18",
+        settings: {
+            optimizer: {
+                enabled: true,
+                runs: 200
+            }
+        }
+    },
     networks: {
         mainnet: {
             url: `https://mainnet.infura.io/v3/${env.INFURA}`,

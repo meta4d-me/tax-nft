@@ -12,13 +12,16 @@ interface IManager {
     event TaxUpdated(uint indexed tokenId, uint stableTax, uint percentageTax);
     event ApprovalGamesUpdated(uint indexed tokenId, address[] games);
     event PriceUpdated(uint indexed derivationTokenId, uint price);
+    event DerivationBind(uint indexed derivationTokenId, uint indexed originTokenId);
     event DerivationMinted(uint indexed originTokenId, uint indexed derivationId, uint price, uint amount, uint minterTax, uint holderTax);
+    event RollIn(address indexed user, address indexed game, uint[] derivationIds, uint[] amounts);
+    event RollOut(address indexed user, address indexed game, uint[] derivationIds, uint[] amounts);
 
     function globalSplit() external view returns (uint);
 
     function origin() external view returns (ITaxNFT);
 
-    function derivations() external view returns (ITaxSemiNFT);
+    function derivative() external view returns (ITaxSemiNFT);
 
     struct StakedNFT {
         address holder;
@@ -45,5 +48,11 @@ interface IManager {
 
     function setDerivationPrice(uint derivationTokenId, uint price) external;
 
-    function mintTaxSemiNFT(uint originTokenId, uint derivationsTokenId, uint amount, uint nonce, bytes memory gameSig) external payable;
+    function bindDerivation(uint derivationTokenId, uint originTokenId) external;
+
+    function mintTaxSemiNFT(uint derivationsTokenId, uint amount, uint nonce, bytes memory gameSig) external payable;
+
+    function rollIn(uint[] memory derivationIds, uint[] memory amounts, address game) external;
+
+    function rollOut(address game, uint[] memory derivationIds, uint[] memory amounts, uint nonce, bytes memory gameSig) external payable;
 }
