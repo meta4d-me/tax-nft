@@ -10,13 +10,13 @@ const env = require('../.env.json');
 describe('Tax NFT test', async function () {
     let taxNFT: TaxNFT, taxSemiNFT: TaxSemiNFT, manager: Manager;
     let owner: SignerWithAddress, account: SignerWithAddress, minter: SignerWithAddress;
-    let stableTax = ethers.utils.parseEther('0.1');
-    let percentageTax = 500;
     let price = ethers.utils.parseEther('1');
+    let minterSplit = price.div(100);
+    let holderSplit = price.div(100);
     let gameSigningKey: SigningKey, game: string;
+    let otherGameKey: SigningKey, otherGame: string, otherDerivationTokenId: BigNumber;
     let derivationTokenId: BigNumber;
     let sigNonce = 0;
-    let emptySig = Buffer.from('');
     it('deploy', async () => {
         const TaxNFT = await ethers.getContractFactory("TaxNFT");
         taxNFT = await upgrades.deployProxy(TaxNFT, {initializer: false}) as TaxNFT;
@@ -43,43 +43,41 @@ describe('Tax NFT test', async function () {
         expect(await taxNFT.tokenIndex()).to.eq(4);
         expect(await taxNFT.ownerOf(0)).to.eq(owner.address);
         expect(await taxNFT.minter(0)).to.eq(minter.address);
-        await taxNFT.connect(minter).setMinterTaxSplit(0, stableTax, percentageTax);
-        const splitTax = await taxNFT.taxSplit(0);
-        expect(splitTax.stableTax).to.eq(stableTax);
-        expect(splitTax.percentageTax).to.eq(percentageTax);
     });
     it('owner cannot mint derivations straightly', async () => {
         await expect(taxSemiNFT.mint(owner.address, 0, 1)).to.be.revertedWith('only manager');
     })
     it('stake TaxNFT', async () => {
         await taxNFT.setApprovalForAll(manager.address, true);
-        await manager.stakeTaxNFT(0, stableTax, percentageTax, []);
-        // split percentage is too high
-        await expect(manager.stakeTaxNFT(1, stableTax, percentageTax + 1, [])).to.be.revertedWith('ill split percentage');
+        await manager.stakeTaxNFT(0, []);
         expect(await taxNFT.ownerOf(0)).to.eq(manager.address);
-        const stakedNFT0 = await manager.stakedNFTs(0);
-        expect(stakedNFT0.holder).to.eq(owner.address);
-        expect(stakedNFT0.stableTax).to.eq(stableTax);
-        expect(stakedNFT0.percentageTax).to.eq(percentageTax);
+        expect(await manager.holders(0)).to.eq(owner.address);
         expect((await manager.approvedGames(0)).length).to.eq(0);
     });
-    it('set price', async () => {
+    it('set price & bind origin', async () => {
         const gameSigner = new ethers.Wallet(gameSigningKey, ethers.provider);
         await manager.connect(gameSigner).setDerivationPrice(derivationTokenId, price);
         expect(await manager.derivationPrice(derivationTokenId)).to.eq(price);
+        await manager.connect(gameSigner).bindDerivation(derivationTokenId, 0);
+        expect(await manager.derivationBind(derivationTokenId)).to.eq(0);
     });
     it('mint derivations when approve any games', async () => {
         let minterBalanceBefore = await ethers.provider.getBalance(minter.address);
         let holderBalanceBefore = await ethers.provider.getBalance(owner.address);
         let gameBalanceBefore = await ethers.provider.getBalance(game);
-        await manager.connect(account).mintTaxSemiNFT(0, derivationTokenId, 1, sigNonce, emptySig, {value: price});
+        let hash = ethers.utils.solidityKeccak256(['bytes'],
+            [ethers.utils.solidityPack(['address', 'uint', 'uint', 'uint', "uint"],
+                [account.address, 0, derivationTokenId, 1, sigNonce])]);
+        let sig = ethers.utils.joinSignature(await gameSigningKey.signDigest(hash));
+        await manager.connect(account).mintTaxSemiNFT(derivationTokenId, 1, sigNonce, sig, {value: price});
         expect(await taxSemiNFT.balanceOf(account.address, derivationTokenId)).to.eq(1);
         let minterBalanceAfter = await ethers.provider.getBalance(minter.address);
         let holderBalanceAfter = await ethers.provider.getBalance(owner.address);
         let gameBalanceAfter = await ethers.provider.getBalance(game);
-        expect(minterBalanceAfter.sub(minterBalanceBefore)).to.eq(stableTax);
-        expect(holderBalanceAfter.sub(holderBalanceBefore)).to.eq(stableTax);
-        expect(gameBalanceAfter.sub(gameBalanceBefore)).to.eq(price.mul(1).sub(stableTax).sub(stableTax));
+        expect(minterBalanceAfter.sub(minterBalanceBefore)).to.eq(minterSplit);
+        expect(holderBalanceAfter.sub(holderBalanceBefore)).to.eq(holderSplit);
+        expect(gameBalanceAfter.sub(gameBalanceBefore)).to.eq(price.mul(1).sub(minterSplit).sub(holderSplit));
+        sigNonce++;
     });
     it('set approval games', async () => {
         await manager.updateApproval(0, [game]);
@@ -93,15 +91,15 @@ describe('Tax NFT test', async function () {
         let minterBalanceBefore = await ethers.provider.getBalance(minter.address);
         let holderBalanceBefore = await ethers.provider.getBalance(owner.address);
         let gameBalanceBefore = await ethers.provider.getBalance(game);
-        await manager.connect(account).mintTaxSemiNFT(0, derivationTokenId, 1, sigNonce, sig, {value: price});
+        await manager.connect(account).mintTaxSemiNFT(derivationTokenId, 1, sigNonce, sig, {value: price});
         expect(await manager.usedSigNonce(game, sigNonce)).to.eq(true);
         expect(await taxSemiNFT.balanceOf(account.address, derivationTokenId)).to.eq(2);
         let minterBalanceAfter = await ethers.provider.getBalance(minter.address);
         let holderBalanceAfter = await ethers.provider.getBalance(owner.address);
         let gameBalanceAfter = await ethers.provider.getBalance(game);
-        expect(minterBalanceAfter.sub(minterBalanceBefore)).to.eq(stableTax);
-        expect(holderBalanceAfter.sub(holderBalanceBefore)).to.eq(stableTax);
-        expect(gameBalanceAfter.sub(gameBalanceBefore)).to.eq(price.mul(1).sub(stableTax).sub(stableTax));
+        expect(minterBalanceAfter.sub(minterBalanceBefore)).to.eq(minterSplit);
+        expect(holderBalanceAfter.sub(holderBalanceBefore)).to.eq(holderSplit);
+        expect(gameBalanceAfter.sub(gameBalanceBefore)).to.eq(price.mul(1).sub(minterSplit).sub(holderSplit));
         sigNonce++;
     });
     it('mint ill derivations when approve to some games', async () => {
@@ -109,7 +107,7 @@ describe('Tax NFT test', async function () {
             [ethers.utils.solidityPack(['address', 'uint', 'uint', 'uint', "uint"],
                 [account.address, 0, derivationTokenId, 1, sigNonce])]);
         let sig = ethers.utils.joinSignature(await gameSigningKey.signDigest(hash));
-        await expect(manager.connect(account).mintTaxSemiNFT(0, derivationTokenId.add(1), 1,
+        await expect(manager.connect(account).mintTaxSemiNFT(derivationTokenId.add(1), 1,
             sigNonce, sig, {value: price})).to.be.revertedWith('ill game approval');
     });
     it('mint derivations with ill sig when approve to some games', async () => {
@@ -117,7 +115,7 @@ describe('Tax NFT test', async function () {
             [ethers.utils.solidityPack(['address', 'uint', 'uint', 'uint', "uint"],
                 [account.address, 0, derivationTokenId.add(1), 1, sigNonce])]);
         let sig = ethers.utils.joinSignature(await gameSigningKey.signDigest(hash));
-        await expect(manager.connect(account).mintTaxSemiNFT(0, derivationTokenId, 1,
+        await expect(manager.connect(account).mintTaxSemiNFT(derivationTokenId, 1,
             sigNonce, sig, {value: price})).to.be.revertedWith('ill sig');
     });
     it('mint derivations with ill nonce when approve any games', async () => {
@@ -126,7 +124,7 @@ describe('Tax NFT test', async function () {
             [ethers.utils.solidityPack(['address', 'uint', 'uint', 'uint', "uint"],
                 [account.address, 0, derivationTokenId, 1, sigNonce])]);
         let sig = ethers.utils.joinSignature(await gameSigningKey.signDigest(hash));
-        await expect(manager.connect(account).mintTaxSemiNFT(0, derivationTokenId, 1, sigNonce, sig,
+        await expect(manager.connect(account).mintTaxSemiNFT(derivationTokenId, 1, sigNonce, sig,
             {value: price})).to.be.revertedWith('ill sig nonce');
         sigNonce++;
     });
@@ -144,30 +142,73 @@ describe('Tax NFT test', async function () {
         let minterBalanceBefore = await ethers.provider.getBalance(minter.address);
         let holderBalanceBefore = await ethers.provider.getBalance(owner.address);
         let gameBalanceBefore = await ethers.provider.getBalance(game);
-        await manager.connect(account).mintTaxSemiNFT(0, derivationTokenId, 1, sigNonce, sig, {value: price});
+        await manager.connect(account).mintTaxSemiNFT(derivationTokenId, 1, sigNonce, sig, {value: price});
         expect(await manager.usedSigNonce(game, sigNonce)).to.eq(true);
         expect(await taxSemiNFT.balanceOf(account.address, derivationTokenId)).to.eq(3);
         let minterBalanceAfter = await ethers.provider.getBalance(minter.address);
         let holderBalanceAfter = await ethers.provider.getBalance(owner.address);
         let gameBalanceAfter = await ethers.provider.getBalance(game);
-        const tax = price.mul(1).mul(percentageTax).div(10000);
-        expect(minterBalanceAfter.sub(minterBalanceBefore)).to.eq(tax);
-        expect(holderBalanceAfter.sub(holderBalanceBefore)).to.eq(tax);
-        expect(gameBalanceAfter.sub(gameBalanceBefore)).to.eq(price.mul(1).sub(tax).sub(tax));
+        expect(minterBalanceAfter.sub(minterBalanceBefore)).to.eq(minterSplit.mul(3));
+        expect(holderBalanceAfter.sub(holderBalanceBefore)).to.eq(holderSplit.mul(3));
+        expect(gameBalanceAfter.sub(gameBalanceBefore)).to.eq(price.mul(1).sub(minterSplit.add(holderSplit).mul(3)));
         sigNonce++;
     });
-    it('update stake tax NFT', async () => {
-        await manager.updateTax(0, stableTax, percentageTax - 1);
-        const stakedNFT0 = await manager.stakedNFTs(0);
-        expect(stakedNFT0.percentageTax).to.eq(percentageTax - 1);
+    it('roll in', async () => {
+        await manager.connect(account).rollIn([derivationTokenId], [3], game)
+        expect(await taxSemiNFT.balanceOf(account.address, derivationTokenId)).to.eq(0);
+        expect(await taxSemiNFT.balanceOf(manager.address, derivationTokenId)).to.eq(0);
+        expect(await manager.rolledInDerivations(account.address, derivationTokenId)).to.eq(3);
+    })
+    it('restore price', async () => {
+        const gameSigner = new ethers.Wallet(gameSigningKey, ethers.provider);
+        price = ethers.utils.parseEther('1');
+        await manager.connect(gameSigner).setDerivationPrice(derivationTokenId, price);
+    });
+    it('prepare new derivation', async () => {
+        otherGameKey = new ethers.utils.SigningKey('0x' + env.PRIVATE_KEY_3);
+        otherGame = ethers.utils.computeAddress(otherGameKey.publicKey);
+        otherDerivationTokenId = ethers.BigNumber.from(1).shl(255).add(ethers.BigNumber.from(otherGame));
+        await owner.sendTransaction({to: otherGame, value: price.mul(10)});
+        const gameSigner = new ethers.Wallet(otherGameKey, ethers.provider);
+        // update game approval
+        await manager.updateApproval(0, [game, otherGame]);
+        await manager.connect(gameSigner).setDerivationPrice(otherDerivationTokenId, price);
+        await manager.connect(gameSigner).bindDerivation(otherDerivationTokenId, 0);
+    });
+    it('roll out', async () => {
+        let derivationIds = [derivationTokenId, otherDerivationTokenId];
+        let amounts = [4, 2];
+        let hash = ethers.utils.solidityKeccak256(['bytes'],
+            [ethers.utils.solidityPack(['address', 'uint[2]', 'uint[2]', 'uint'],
+                [account.address, derivationIds, amounts, sigNonce])]);
+        let sig = ethers.utils.joinSignature(await otherGameKey.signDigest(hash));
+        let minterBalanceBefore = await ethers.provider.getBalance(minter.address);
+        let holderBalanceBefore = await ethers.provider.getBalance(owner.address);
+        let gameBalanceBefore = await ethers.provider.getBalance(game);
+        let otherGameBalanceBefore = await ethers.provider.getBalance(otherGame);
+        let totalTax = price.mul(3); // mint 1 new derivation, 2 new other derivation
+        await manager.connect(account).rollOut(otherGame, derivationIds, amounts, sigNonce, sig, {value: totalTax});
+        expect(await taxSemiNFT.balanceOf(account.address, derivationTokenId)).to.eq(4);
+        expect(await taxSemiNFT.balanceOf(manager.address, derivationTokenId)).to.eq(0);
+        expect(await taxSemiNFT.balanceOf(account.address, otherDerivationTokenId)).to.eq(2);
+        expect(await taxSemiNFT.balanceOf(manager.address, otherDerivationTokenId)).to.eq(0);
+        let minterBalanceAfter = await ethers.provider.getBalance(minter.address);
+        let holderBalanceAfter = await ethers.provider.getBalance(owner.address);
+        let gameBalanceAfter = await ethers.provider.getBalance(game);
+        let otherGameBalanceAfter = await ethers.provider.getBalance(otherGame);
+        let minterTax = minterSplit.mul(3);
+        let holderTax = holderSplit.mul(3);
+        expect(minterBalanceAfter.sub(minterBalanceBefore)).to.eq(minterTax);
+        expect(holderBalanceAfter.sub(holderBalanceBefore)).to.eq(holderTax);
+        // game receive 1 derivation fee
+        expect(gameBalanceAfter.sub(gameBalanceBefore)).to.eq(0);
+        // other game receive 2 other derivation fee
+        expect(otherGameBalanceAfter.sub(otherGameBalanceBefore)).to.eq(totalTax.sub(minterTax).sub(holderTax));
     });
     it('unstake tax NFT', async () => {
         await manager.unstakeTaxNFT(0);
         expect(await taxNFT.ownerOf(0)).to.eq(owner.address);
-        const stakedNFT0 = await manager.stakedNFTs(0);
-        expect(stakedNFT0.holder).to.eq('0x0000000000000000000000000000000000000000');
-        expect(stakedNFT0.stableTax).to.eq(0);
-        expect(stakedNFT0.percentageTax).to.eq(0);
+        expect(await manager.holders(0)).to.eq('0x0000000000000000000000000000000000000000');
         expect((await manager.approvedGames(0)).length).to.eq(0);
     });
 });

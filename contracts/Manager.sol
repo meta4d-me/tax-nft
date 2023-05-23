@@ -12,68 +12,65 @@ contract Manager is OwnableUpgradeable, ERC721HolderUpgradeable, ERC1155HolderUp
 
     uint constant public MAX_SPLIT = 2000;
     uint constant public SPLIT_BASE = 10000;
-    uint public globalSplit;
+    uint public holderSplit;
+    uint public minterSplit;
 
     ITaxNFT public origin;
     ITaxSemiNFT public derivative;
 
+    mapping(uint => address) public holders;
 
-    mapping(uint => StakedNFT) public stakedNFTs;
+    mapping(uint => address[]) internal approvedGamesInternal;
 
     mapping(uint => uint) public derivationPrice;
 
     // derivation tokenId => origin tokenId
     mapping(uint => uint) public derivationBind;
 
+    // game => nonce => bool
     mapping(address => mapping(uint => bool)) public usedSigNonce;
+    // user => derivationId => amount
+    mapping(address => mapping(uint => uint)) public rolledInDerivations;
 
     function initialize(ITaxNFT _origin, ITaxSemiNFT _derivative) public initializer {
         __Ownable_init_unchained();
         __ERC721Holder_init_unchained();
         __ERC1155Holder_init_unchained();
-        globalSplit = 500;
+        holderSplit = 100;
+        minterSplit = 100;
         origin = _origin;
         derivative = _derivative;
     }
 
-    function setSplit(uint _split) public onlyOwner {
-        require(_split <= MAX_SPLIT, 'exceed max split');
-        globalSplit = _split;
+    function setSplit(uint _holder, uint _minter) public onlyOwner {
+        require(_holder <= MAX_SPLIT && _minter <= MAX_SPLIT, 'exceed max split');
+        holderSplit = _holder;
+        minterSplit = _minter;
+
+        emit SplitUpdate(_holder, _minter);
     }
 
-    function stakeTaxNFT(uint tokenId, uint stableTax, uint percentageTax, address[] memory _approvedGames) public {
-        require(percentageTax <= globalSplit, 'ill split percentage');
-
+    function stakeTaxNFT(uint tokenId, address[] memory _approvedGames) public {
         origin.safeTransferFrom(msg.sender, address(this), tokenId, '');
-        stakedNFTs[tokenId] = StakedNFT(msg.sender, stableTax, percentageTax, _approvedGames);
+        holders[tokenId] = msg.sender;
+        approvedGamesInternal[tokenId] = _approvedGames;
 
-        emit NFTStaked(tokenId, stableTax, percentageTax, _approvedGames);
+        emit NFTStaked(tokenId, msg.sender, _approvedGames);
     }
 
     // clear all stale status after unstake
     function unstakeTaxNFT(uint tokenId) public {
-        require(msg.sender == stakedNFTs[tokenId].holder, 'ill holder');
-        delete stakedNFTs[tokenId];
+        require(msg.sender == holders[tokenId], 'ill holder');
+        delete holders[tokenId];
+        delete approvedGamesInternal[tokenId];
         origin.safeTransferFrom(address(this), msg.sender, tokenId, '');
         emit NFTUnstaked(tokenId);
     }
 
-    function updateTax(uint tokenId, uint stableTax, uint percentageTax) public {
-        require(percentageTax <= globalSplit, 'ill split percentage');
-
-        StakedNFT storage stakedNFT = stakedNFTs[tokenId];
-        require(msg.sender == stakedNFT.holder, 'ill holder');
-        stakedNFT.stableTax = stableTax;
-        stakedNFT.percentageTax = percentageTax;
-
-        emit TaxUpdated(tokenId, stableTax, percentageTax);
-    }
-
     // reset approvals wholly
     function updateApproval(uint tokenId, address[] memory newApprovals) public {
-        StakedNFT storage stakedNFT = stakedNFTs[tokenId];
-        require(msg.sender == stakedNFT.holder, 'ill holder');
-        stakedNFT.approvedGames = newApprovals;
+        require(msg.sender == holders[tokenId], 'ill holder');
+        approvedGamesInternal[tokenId] = newApprovals;
         emit ApprovalGamesUpdated(tokenId, newApprovals);
     }
 
@@ -100,35 +97,22 @@ contract Manager is OwnableUpgradeable, ERC721HolderUpgradeable, ERC1155HolderUp
         uint originTokenId = derivationBind[derivationsTokenId];
         require(origin.ownerOf(originTokenId) == address(this), 'unstake');
 
-        StakedNFT memory stakedNFT = stakedNFTs[originTokenId];
-        require(stakedNFT.holder != address(0), 'ill stake');
+        address holder = holders[originTokenId];
+        require(holder != address(0), 'ill stake');
 
         address game = address(uint160(derivationsTokenId));
-        if (stakedNFT.approvedGames.length > 0) {// check game approval
-            checkApprove(stakedNFT.approvedGames, game);
-            // check game signature
-            require(!usedSigNonce[game][nonce], 'ill sig nonce');
-            bytes32 hash = keccak256(abi.encodePacked(msg.sender, originTokenId, derivationsTokenId, amount, nonce));
-            require(SignatureCheckerUpgradeable.isValidSignatureNow(game, hash, gameSig), 'ill sig');
-            usedSigNonce[game][nonce] = true;
+        if (approvedGamesInternal[originTokenId].length > 0) {// check game approval
+            checkApprove(approvedGamesInternal[originTokenId], game);
         }
+        // check game signature
+        require(!usedSigNonce[game][nonce], 'ill sig nonce');
+        bytes32 hash = keccak256(abi.encodePacked(msg.sender, originTokenId, derivationsTokenId, amount, nonce));
+        require(SignatureCheckerUpgradeable.isValidSignatureNow(game, hash, gameSig), 'ill sig');
+        usedSigNonce[game][nonce] = true;
 
-        uint price = derivationPrice[derivationsTokenId];
-        uint total = price * amount;
-        require(total > 0, 'ill derivation price');
-        require(total == msg.value, 'ill value');
-
-        (uint minterStableTax, uint minterPercentageTax) = origin.taxSplit(originTokenId);
-        uint minterTax = max(minterStableTax * amount, minterPercentageTax * total / SPLIT_BASE);
-        uint holderTax = max(stakedNFT.stableTax * amount, stakedNFT.percentageTax * total / SPLIT_BASE);
-
-        /* split revenue */
-        payable(origin.minter(originTokenId)).transfer(minterTax);
-        payable(stakedNFT.holder).transfer(holderTax);
-        payable(game).transfer(total - minterTax - holderTax);
+        payable(game).transfer(settleMintFee(derivationsTokenId, amount));
         // mint derivations
         derivative.mint(msg.sender, derivationsTokenId, amount);
-        emit DerivationMinted(originTokenId, derivationsTokenId, price, amount, minterTax, holderTax);
     }
 
     function rollIn(uint[] memory derivationIds, uint[] memory amounts, address game) public {
@@ -136,6 +120,10 @@ contract Manager is OwnableUpgradeable, ERC721HolderUpgradeable, ERC1155HolderUp
         checkDerivations(derivationIds, game);
 
         derivative.burnBatch(msg.sender, derivationIds, amounts);
+
+        for (uint i = 0; i < derivationIds.length; i++) {
+            rolledInDerivations[msg.sender][derivationIds[i]] += amounts[i];
+        }
 
         emit RollIn(msg.sender, game, derivationIds, amounts);
     }
@@ -148,33 +136,52 @@ contract Manager is OwnableUpgradeable, ERC721HolderUpgradeable, ERC1155HolderUp
         usedSigNonce[game][nonce] = true;
         // check approval
         checkDerivations(derivationIds, game);
+        uint gameRevenue = 0;
         // pay
         for (uint i = 0; i < derivationIds.length; i++) {
-            // TODO:
+            uint rolledInAmount = rolledInDerivations[msg.sender][derivationIds[i]];
+            if (amounts[i] <= rolledInAmount) {
+                rolledInDerivations[msg.sender][derivationIds[i]] -= amounts[i];
+            } else {// settle fee
+                gameRevenue += settleMintFee(derivationIds[i], amounts[i] - rolledInAmount);
+                rolledInDerivations[msg.sender][derivationIds[i]] = 0;
+            }
         }
         // mint
         derivative.mintBatch(msg.sender, derivationIds, amounts);
 
+        payable(game).transfer(gameRevenue);
+
         emit RollOut(msg.sender, game, derivationIds, amounts);
     }
 
-    function approvedGames(uint tokenId) public view returns (address[] memory){
-        return stakedNFTs[tokenId].approvedGames;
+    function settleMintFee(uint derivationId, uint amount) internal returns (uint gameRevenue){
+        uint price = derivationPrice[derivationId];
+        uint total = price * amount;
+        uint minterTax = minterSplit * total / SPLIT_BASE;
+        uint holderTax = holderSplit * total / SPLIT_BASE;
+        gameRevenue += total - minterTax - holderTax;
+
+        uint originTokenId = derivationBind[derivationId];
+        payable(origin.minter(originTokenId)).transfer(minterTax);
+        payable(holders[originTokenId]).transfer(holderTax);
+
+        emit DerivationMinted(originTokenId, derivationId, price, amount, minterTax, holderTax);
     }
 
+    /// @notice require 1. originToken should be staked; 2. derivation's game should be approved by originToken
     function checkDerivations(uint[] memory derivationsIds, address game) internal view {
         for (uint i = 0; i < derivationsIds.length; i++) {
             uint originTokenId = derivationBind[derivationsIds[i]];
             // check NFT is staked
-            StakedNFT memory stakedNFT = stakedNFTs[originTokenId];
-            require(stakedNFT.holder != address(0), 'origin NFT is not staked');
+            require(holders[originTokenId] != address(0), 'origin NFT is not staked');
             // check self derivation
             if (address(uint160(derivationsIds[i])) == game) {
                 continue;
             }
             // check approve
-            if (stakedNFT.approvedGames.length > 0) {
-                checkApprove(stakedNFT.approvedGames, game);
+            if (approvedGamesInternal[originTokenId].length > 0) {
+                checkApprove(approvedGamesInternal[originTokenId], game);
             }
         }
     }
@@ -190,7 +197,7 @@ contract Manager is OwnableUpgradeable, ERC721HolderUpgradeable, ERC1155HolderUp
         require(approval, 'ill game approval');
     }
 
-    function max(uint256 a, uint256 b) internal pure returns (uint256) {
-        return a > b ? a : b;
+    function approvedGames(uint tokenId) external view returns (address[] memory){
+        return approvedGamesInternal[tokenId];
     }
 }

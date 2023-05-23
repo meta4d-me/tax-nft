@@ -7,9 +7,9 @@ import './ITaxSemiNFT.sol';
 
 interface IManager {
 
-    event NFTStaked(uint indexed tokenId, uint initStableTax, uint initPercentageTax, address[] approvedGames);
+    event SplitUpdate(uint holderSplit, uint minterSplit);
+    event NFTStaked(uint indexed tokenId, address indexed holder, address[] approvedGames);
     event NFTUnstaked(uint indexed tokenId);
-    event TaxUpdated(uint indexed tokenId, uint stableTax, uint percentageTax);
     event ApprovalGamesUpdated(uint indexed tokenId, address[] games);
     event PriceUpdated(uint indexed derivationTokenId, uint price);
     event DerivationBind(uint indexed derivationTokenId, uint indexed originTokenId);
@@ -17,32 +17,31 @@ interface IManager {
     event RollIn(address indexed user, address indexed game, uint[] derivationIds, uint[] amounts);
     event RollOut(address indexed user, address indexed game, uint[] derivationIds, uint[] amounts);
 
-    function globalSplit() external view returns (uint);
+    function holderSplit() external view returns (uint);
+
+    function minterSplit() external view returns (uint);
 
     function origin() external view returns (ITaxNFT);
 
     function derivative() external view returns (ITaxSemiNFT);
 
-    struct StakedNFT {
-        address holder;
-        uint stableTax;
-        uint percentageTax;
-        address[] approvedGames;
-    }
-
-    function stakedNFTs(uint tokenId) external view returns (address, uint, uint);
+    function holders(uint tokenId) external view returns (address);
 
     function approvedGames(uint tokenId) external view returns (address[] memory);
 
     function derivationPrice(uint tokenId) external view returns (uint price);
 
+    function derivationBind(uint tokenId) external view returns (uint originTokenId);
+
     function usedSigNonce(address game, uint nonce) external view returns (bool);
 
-    function stakeTaxNFT(uint tokenId, uint stableTax, uint percentageTax, address[] memory _approvedGames) external;
+    function rolledInDerivations(address user, uint derivationId) external view returns (uint amount);
+
+    function setSplit(uint _holderSplit, uint _minterSplit) external;
+
+    function stakeTaxNFT(uint tokenId, address[] memory _approvedGames) external;
 
     function unstakeTaxNFT(uint tokenId) external;
-
-    function updateTax(uint tokenId, uint stableTax, uint percentageTax) external;
 
     function updateApproval(uint tokenId, address[] memory newApprovals) external;
 
